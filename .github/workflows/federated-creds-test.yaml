@@ -1,0 +1,56 @@
+name: xyz-test
+on:
+  push:
+permissions:
+  id-token: write
+  contents: read
+env:
+  vaultName: backstage-secrets
+jobs:
+  federeated-credentials:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+        
+    - name: 'Az CLI login'
+      uses: azure/login@v1.4.7
+      with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  
+    - name: 'Run Azure CLI commands'
+      run: |
+          az account show
+          az group list
+          pwd
+          
+    # Secret Management
+    - name: Reading the application secrets
+      id: read-secrets
+      uses: mikefarah/yq@master
+      with:
+        cmd: yq -o=props  '.secrets.production' 'configuration/app-config.yaml'
+
+    - name: Creating a secrets file to use in next steps
+      run: |
+        touch .secrets-in .secrets-out
+    - name: Add all configuration variables to github env file to use in further actions
+      run: >
+        echo -e '${{ steps.read-secrets.outputs.result }}' | sed '/^$/d;s/[[:blank:]]//g' >> .secrets-in
+    - name: Running azure cli commands
+      run: |
+        #!/usr/bin/bash
+        cat .secrets-in | while read line || [[ -n $line ]];
+        do
+          [[ ${line//[[:space:]]/} =~ ^#.* || -z "$line" ]] && continue
+          echo $line | tr "=" "\n" | while read -r key; do
+          read -r value
+            echo "$key=$(az keyvault secret show --name $value --vault-name ${{ env.vaultName }} --query value)" >> .secrets-out
+          done
+        done
+    
+    - run: |
+        cat .secrets-out
